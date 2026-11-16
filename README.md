@@ -5,6 +5,8 @@ structured data: vendor, tax ID, customer, invoice number, dates, line items, su
 Review the results in the browser and download everything as one Excel file (an "Invoices" sheet plus a
 "Line items" sheet). Saves accountants and small businesses hours of manual data entry.
 
+![Invoice Extractor screenshot](docs/screenshot.png)
+
 ## Features
 - PDF, PNG, JPG and WEBP, several files at once (drag and drop).
 - Schema-validated output (Pydantic), dates normalised to YYYY-MM-DD, amounts as numbers.
