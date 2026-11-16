@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invoice Extractor</title>
+<style>
+:root{--bg:#0b0b0d;--panel:#141418;--line:#26262c;--fg:#f1f1f3;--dim:#8a8a94;--accent:#e11d2e}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:32px 6%}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+h1{font-size:22px;font-weight:600}
+h1 span{color:var(--accent)}
+.tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:4px 12px}
+#drop{border:1.5px dashed var(--line);border-radius:12px;padding:40px;text-align:center;color:var(--dim);cursor:pointer;transition:.2s;background:var(--panel)}
+#drop:hover,#drop.over{border-color:var(--accent);color:var(--fg)}
+#drop b{display:block;font-size:17px;color:var(--fg);margin-bottom:6px}
+.bar{display:flex;justify-content:space-between;align-items:center;margin:24px 0 12px}
+.bar span{color:var(--dim);font-size:14px}
+button{background:var(--accent);border:0;border-radius:9px;padding:10px 20px;color:#fff;font-weight:600;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:10px;overflow:hidden;font-size:14px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line)}
+th{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:500}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.main{cursor:pointer}
+tr.main:hover{background:#1b1b20}
+tr.items td{background:#101013;color:var(--dim);font-size:13px}
+.err{color:#ff6b6b}
+.wait{color:var(--dim);font-style:italic}
+</style>
+</head>
+<body>
+<header><h1>Invoice <span>Extractor</span></h1><span class="tag" id="prov">AI: …</span></header>
+<label id="drop"><b>Drop invoices or receipts here</b>PDF, PNG or JPG — or click to choose<input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple hidden></label>
+<div class="bar"><span id="count">No invoices yet</span><button id="xl" disabled>Download Excel</button></div>
+<table><thead><tr><th>File</th><th>Vendor</th><th>Invoice #</th><th>Date</th><th>Items</th><th class="num">Tax</th><th class="num">Total</th></tr></thead><tbody id="rows"></tbody></table>
+<script>
+const $ = s => document.querySelector(s), done = [];
+const esc = v => String(v ?? "—").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const money = (v, c) => v == null ? "—" : Number(v).toLocaleString("en", {minimumFractionDigits: 2}) + (c ? " " + c : "");
+fetch("/api/info").then(r => r.json()).then(j => $("#prov").textContent = "AI: " + (j.provider === "claude" ? "Claude" : "Gemini (free)"));
+
+function count(){ $("#count").textContent = done.length ? `${done.length} invoice${done.length > 1 ? "s" : ""} extracted — click a row for line items` : "No invoices yet"; $("#xl").disabled = !done.length; }
+
+async function handle(files){
+  for (const f of files) {
+    const tr = document.createElement("tr"); tr.innerHTML = `<td>${esc(f.name)}</td><td colspan="6" class="wait">Reading…</td>`;
+    $("#rows").appendChild(tr);
+    const fd = new FormData(); fd.append("file", f);
+    try {
+      const r = await fetch("/api/extract", {method: "POST", body: fd}); const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || "Failed");
+      const v = j.invoice; done.push(j); tr.className = "main";
+      tr.innerHTML = `<td>${esc(j.file)}</td><td>${esc(v.vendor_name)}</td><td>${esc(v.invoice_number)}</td><td>${esc(v.invoice_date)}</td><td>${v.items.length}</td><td class="num">${money(v.tax)}</td><td class="num">${money(v.total, v.currency)}</td>`;
+      const sub = document.createElement("tr"); sub.className = "items"; sub.hidden = true;
+      sub.innerHTML = `<td colspan="7">${v.items.map(i => `${esc(i.description)} — ${i.quantity ?? "?"} × ${money(i.unit_price)} = ${money(i.total)}`).join("<br>") || "No line items"}</td>`;
+      tr.after(sub); tr.onclick = () => sub.hidden = !sub.hidden;
+    } catch (e) { tr.innerHTML = `<td>${esc(f.name)}</td><td colspan="6" class="err">⚠ ${esc(e.message)}</td>`; }
+    count();
+  }
+}
+$("#file").onchange = e => handle(e.target.files);
+const drop = $("#drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); handle(e.dataTransfer.files); };
+$("#xl").onclick = async () => {
+  const r = await fetch("/api/excel", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(done)});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = "invoices.xlsx"; a.click();
+};
+</script>
+</body>
+</html>
