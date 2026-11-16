@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import base64
 import os
+import time
+
+
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +20,7 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
 PROMPT = """Extract the data from this invoice or receipt.
 Rules: copy names, numbers and dates exactly as printed; dates as YYYY-MM-DD; amounts as plain numbers
 without currency symbols; currency as a 3-letter code (EGP, USD, EUR...). Use null for anything not shown.
+If the document is not an invoice, receipt or bill, set is_invoice to false and leave the rest empty.
 Do not calculate values that are not printed, except line totals when only quantity and unit price appear."""
 
 
@@ -28,6 +32,7 @@ class LineItem(BaseModel):
 
 
 class Invoice(BaseModel):
+    is_invoice: bool = Field(True, description="false if the document is not an invoice, receipt or bill")
     vendor_name: str | None = Field(None, description="Seller / company issuing the invoice")
     vendor_tax_id: str | None = None
     customer_name: str | None = None
@@ -69,19 +74,31 @@ def _gemini(data: bytes, mime: str) -> Invoice:
         timeout=45_000, retry_options=types.HttpRetryOptions(attempts=1)))
     config = types.GenerateContentConfig(response_mime_type="application/json", response_schema=Invoice)
     parts = [types.Part.from_bytes(data=data, mime_type=mime), PROMPT]
+    busy = False
     for model in dict.fromkeys(GEMINI_MODELS):     # each free model has its own quota
-        try:
-            resp = _gclient.models.generate_content(model=model, contents=parts, config=config)
-        except errors.ClientError as exc:
-            if exc.code in (404, 429):
+        for attempt in range(2):                   # one quick retry when Google is momentarily overloaded
+            try:
+                resp = _gclient.models.generate_content(model=model, contents=parts, config=config)
+            except errors.ClientError as exc:
+                if exc.code in (404, 429):
+                    break
+                raise ExtractionError(502, f"Gemini rejected the file ({exc.code}).") from exc
+            except (errors.ServerError, TimeoutError, OSError):
+                busy = True
+                time.sleep(1)
                 continue
-            raise ExtractionError(502, f"Gemini rejected the file ({exc.code}).") from exc
-        except errors.ServerError:
-            continue
-        if not resp.text:
-            raise ExtractionError(422, "The AI could not read this document.")
-        return Invoice.model_validate_json(resp.text)
-    raise ExtractionError(429, "The free AI quota is used up for now - please try again later.")
+            if not resp.text:
+                raise ExtractionError(422, "The AI could not read this document.")
+            return _check(Invoice.model_validate_json(resp.text))
+    if busy:
+        raise ExtractionError(503, "Google's free AI is busy right now - please try again in a minute.")
+    raise ExtractionError(429, "The free AI quota is used up for today - it resets tomorrow.")
+
+
+def _check(inv: Invoice) -> Invoice:
+    if not inv.is_invoice:
+        raise ExtractionError(422, "This doesn't look like an invoice or receipt.")
+    return inv
 
 
 # ---------------------------------------------------------------- Claude (paid)
@@ -109,4 +126,4 @@ def _claude(data: bytes, mime: str) -> Invoice:
         raise ExtractionError(503, "Could not reach the AI service.") from exc
     if resp.stop_reason == "refusal" or resp.parsed_output is None:
         raise ExtractionError(422, "The AI could not read this document.")
-    return resp.parsed_output
+    return _check(resp.parsed_output)
