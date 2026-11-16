@@ -11,7 +11,7 @@ import os
 
 from pydantic import BaseModel, Field
 
-GEMINI_MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.5-flash"), "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+GEMINI_MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"), "gemini-3.1-flash-lite", "gemini-3.5-flash"]  # lite first: fast; full flash is often overloaded on the free tier
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
 
 PROMPT = """Extract the data from this invoice or receipt.
@@ -66,7 +66,7 @@ def _gemini(data: bytes, mime: str) -> Invoice:
         raise ExtractionError(500, "Server is missing GEMINI_API_KEY (free from Google AI Studio).")
     global _gclient
     _gclient = _gclient or genai.Client(http_options=types.HttpOptions(
-        timeout=90_000, retry_options=types.HttpRetryOptions(attempts=1)))
+        timeout=45_000, retry_options=types.HttpRetryOptions(attempts=1)))
     config = types.GenerateContentConfig(response_mime_type="application/json", response_schema=Invoice)
     parts = [types.Part.from_bytes(data=data, mime_type=mime), PROMPT]
     for model in dict.fromkeys(GEMINI_MODELS):     # each free model has its own quota
